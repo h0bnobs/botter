@@ -1,0 +1,9 @@
+psutil
+requests
+discord.py
+selenium
+webdriver-manager
+pynput
+python3-xlib
+openai
+python-dotenv
