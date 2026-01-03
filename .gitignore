@@ -1,3 +1,5 @@
 .env
 .idea
 discord.log
+.venv
+venv/

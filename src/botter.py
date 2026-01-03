@@ -11,6 +11,8 @@ import requests
 from discord import app_commands
 from discord.ext import commands
 
+import nmap as nm
+
 # Load environment variables
 dotenv.load_dotenv()
 
@@ -22,6 +24,7 @@ USER_ID_MAX = int(os.getenv("USER_ID_MAX", 0))
 
 ALLOWED_USERS = {USER_ID_CHAPPY, USER_ID_MAX}
 BLOCKED_USERS = {USER_ID_JOSH}
+NETWORK_RANGES = ["192.168.5.0/24", "192.168.1.0/24"]
 
 # Bot setup
 intents = discord.Intents.default()
@@ -131,37 +134,38 @@ async def ip(interaction: discord.Interaction):
 async def scan(interaction: discord.Interaction):
     await interaction.response.defer()
 
-    cmd = "nmap -sn -T5 -PE -PP -PM -PR 192.168.5.0/24 192.168.1.0/24 | grep '^Nmap scan' | awk '{print $5}'"
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
-
-    if result.stdout:
-        await interaction.followup.send(f"```\n{result.stdout}```")
-    else:
-        await interaction.followup.send("No hosts found.")
+    try:
+        hosts = nm.discover_hosts(NETWORK_RANGES)
+        if hosts:
+            await interaction.followup.send(f"```\n{chr(10).join(hosts)}```")
+        else:
+            await interaction.followup.send("No hosts found.")
+    except RuntimeError as e:
+        await interaction.followup.send(f"Error: {e}")
 
 
 @bot.tree.command(name="portscan", description="Scan local network for devices and open ports", guild=guild_object)
 @is_allowed_user()
 async def portscan(interaction: discord.Interaction):
     await interaction.response.defer()
-    await interaction.followup.send("Discovering hosts...")
 
-    discovery_cmd = "nmap -sn -T5 -PE -PP -PM -PR 192.168.5.0/24 192.168.1.0/24 | grep '^Nmap scan' | awk '{print $5}'"
-    result = subprocess.run(discovery_cmd, shell=True, capture_output=True, text=True, timeout=120)
+    try:
+        await interaction.followup.send("Discovering hosts...")
+        hosts = nm.discover_hosts(NETWORK_RANGES)
 
-    if not result.stdout:
-        await interaction.followup.send("No hosts found.")
-        return
+        if not hosts:
+            await interaction.followup.send("No hosts found.")
+            return
 
-    hosts = result.stdout.strip().splitlines()
-    await interaction.followup.send(f"Found {len(hosts)} hosts. Scanning ports...")
+        await interaction.followup.send(f"Found {len(hosts)} hosts. Scanning ports...")
+        port_results = nm.scan_ports(hosts)
 
-    for host in hosts:
-        port_cmd = f"nmap -F -T5 {host} | awk '/Nmap scan report for/ {{ip=$NF}} /^[0-9]+\\/tcp\\s+open/ {{print ip, $1}}'"
-        port_result = subprocess.run(port_cmd, shell=True, capture_output=True, text=True, timeout=60)
+        for host, ports in port_results.items():
+            if ports:
+                await interaction.followup.send(f"```\n{host}:\n  {chr(10) + '  '.join(ports)}```")
 
-        if port_result.stdout:
-            await interaction.followup.send(f"```\n{host}:\n{port_result.stdout}```")
+    except RuntimeError as e:
+        await interaction.followup.send(f"Error: {e}")
 
 
 @bot.tree.command(name="robots", description="Fetch robots.txt from a website", guild=guild_object)
@@ -195,16 +199,6 @@ async def tuah(interaction: discord.Interaction):
     await interaction.response.send_message(
         "https://media.discordapp.net/attachments/625765035754651673/1367451011186429992/IMG_0140.png"
     )
-
-
-# @bot.tree.command(name="bangers", description="Get link to the replied message", guild=guild_object)
-# @is_allowed_user()
-# async def bangers(interaction: discord.Interaction):
-#     # This command needs to be invoked differently - slash commands don't have message references
-#     # Consider using a context menu command instead
-#     await interaction.response.send_message(
-#         "This command needs to be converted to a message context menu to work with replies.", ephemeral=True
-#     )
 
 
 if __name__ == "__main__":
