@@ -16,7 +16,7 @@ def discover_hosts(networks: list[str], timeout: int = 10) -> list[str]:
         RuntimeError: If the nmap command fails
     """
     network_args = " ".join(networks)
-    cmd = f"nmap -sn -T5 -PE -PP -PM -PR --host-timeout {timeout}s {network_args} | grep '^Nmap scan' | awk '{{print $5}}'"
+    cmd = f"nmap -n -sn -T5 -PE -PP -PM -PR --host-timeout {timeout}s {network_args} | grep '^Nmap scan' | awk '{{print $5}}'"
 
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
@@ -46,7 +46,7 @@ def scan_ports(hosts: list[str], timeout: int = 30) -> dict[str, list[str]]:
     results = {}
 
     for host in hosts:
-        cmd = f"nmap -F -T5 --host-timeout {timeout}s {host}"
+        cmd = f"nmap -n -F -T5 --host-timeout {timeout}s {host}"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
         if result.returncode != 0 and result.stderr:
