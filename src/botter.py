@@ -9,33 +9,30 @@ import dotenv
 import psutil
 import requests
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import nmap as nm
+from eb import get_new_listings, EbayAuthError, EbayAPIError
 
-# Load environment variables
 dotenv.load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID", 0))
+GUILD_IDS = [int(id) for id in os.getenv("GUILD_IDS", "").split(",") if id]
 USER_ID_CHAPPY = int(os.getenv("USER_ID_CHAPPY", 0))
 USER_ID_JOSH = int(os.getenv("USER_ID_JOSH", 0))
 USER_ID_MAX = int(os.getenv("USER_ID_MAX", 0))
+PRIVATE_SERVER_BOT_CHANNEL_ID = int(os.getenv("PRIVATE_SERVER_BOT_CHANNEL_ID", 0))
 
-ALLOWED_USERS = {USER_ID_CHAPPY, USER_ID_MAX}
 BLOCKED_USERS = {USER_ID_JOSH}
 NETWORK_RANGES = ["192.168.5.0/24", "192.168.1.0/24"]
 
-# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.presences = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
-guild_object = discord.Object(id=GUILD_ID)
 
-# Logging
 handler = logging.FileHandler(filename="discord.log", encoding="utf-8", mode="w")
 
 
@@ -44,17 +41,86 @@ def is_allowed_user():
 
     async def predicate(interaction: discord.Interaction) -> bool:
         if interaction.user.id in BLOCKED_USERS:
-            await interaction.response.send_message("https://tenor.com/view/no-i-dont-think-i-will-captain-america-old-capt-gif-17162888", ephemeral=True)
+            await interaction.response.send_message(
+                "https://tenor.com/view/no-i-dont-think-i-will-captain-america-old-capt-gif-17162888", ephemeral=True)
             return False
         return True
 
     return app_commands.check(predicate)
 
 
+# @tasks.loop(seconds=10)
+@tasks.loop(minutes=5)
+async def check_ebay():
+    channel = bot.get_channel(PRIVATE_SERVER_BOT_CHANNEL_ID)
+    if not channel:
+        logging.error("eBay channel not found")
+        return
+
+    try:
+        listings = get_new_listings()
+
+        for listing in listings:
+            embed = discord.Embed(
+                title=listing["title"],
+                url=listing["url"],
+                color=0x00ff00
+            )
+            embed.add_field(name="Price", value=listing["price"], inline=True)
+
+            if listing["delivery"]:
+                delivery = listing["delivery"]
+                delivery_text = delivery["cost"]
+                if delivery["min_date"] and delivery["max_date"]:
+                    delivery_text += f" ({delivery['min_date']} - {delivery['max_date']})"
+                embed.add_field(name="Delivery", value=delivery_text, inline=True)
+
+            if listing["image"]:
+                embed.set_thumbnail(url=listing["image"])
+
+            await channel.send(embed=embed)
+
+    except EbayAuthError as e:
+        embed = discord.Embed(
+            title="⚠️ eBay Authentication Error",
+            description=str(e),
+            color=0xff0000
+        )
+        await channel.send(embed=embed)
+        logging.error(f"eBay auth error: {e}")
+
+    except EbayAPIError as e:
+        embed = discord.Embed(
+            title="⚠️ eBay API Error",
+            description=str(e),
+            color=0xff9900
+        )
+        await channel.send(embed=embed)
+        logging.error(f"eBay API error: {e}")
+
+    except Exception as e:
+        embed = discord.Embed(
+            title="❌ eBay Check Failed",
+            description=f"Unexpected error: {type(e).__name__}",
+            color=0xff0000
+        )
+        await channel.send(embed=embed)
+        logging.exception("Unexpected error in check_ebay")
+
+
+@check_ebay.before_loop
+async def before_check_ebay():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_ready():
-    await bot.tree.sync(guild=guild_object)
+    for guild_id in GUILD_IDS:
+        await bot.tree.sync(guild=discord.Object(id=guild_id))
     print(f"Logged in as {bot.user.name} ({bot.user.id})")
+
+    if not check_ebay.is_running():
+        check_ebay.start()
 
 
 @bot.event
@@ -92,28 +158,26 @@ async def on_message(message: discord.Message):
             # Send the new message with fixed links and attachments
             await message.channel.send(final_message, files=files if files else None)
 
-    # Respond to trigger words
-    trigger_words = ["tuah", "hawk", "the thing"]
+    trigger_words = ["tuah", "hawk", "the thing", "67"]
     if any(word in message.content.lower() for word in trigger_words):
         await message.channel.send(
             "https://tenor.com/view/marvel-fan4stic-fantastic-four-the-thing-say-that-again-gif-9345984830195785978"
         )
 
-    # 1 in 100 chance response to Max
-    if message.author.id == USER_ID_MAX and random.randint(1, 100) == 1:
-        await message.channel.send("wowee 1 in 100!")
+    if message and random.randint(1, 1000) == 1:
+        await message.channel.send("1 in 1000!")
 
     await bot.process_commands(message)
 
 
-@bot.tree.command(name="cpu", description="Show current CPU usage", guild=guild_object)
+@bot.tree.command(name="cpu", description="Show current CPU usage")
 @is_allowed_user()
 async def cpu(interaction: discord.Interaction):
     cpu_usage = psutil.cpu_percent(interval=1)
     await interaction.response.send_message(f"{cpu_usage}%")
 
 
-@bot.tree.command(name="ip", description="Get public and private IP addresses", guild=guild_object)
+@bot.tree.command(name="ip", description="Get public and private IP addresses")
 @is_allowed_user()
 async def ip(interaction: discord.Interaction):
     if interaction.user.id != USER_ID_MAX:
@@ -129,7 +193,7 @@ async def ip(interaction: discord.Interaction):
         await interaction.response.send_message(f"Error: {e}")
 
 
-@bot.tree.command(name="scan", description="Ping scan for known network ranges", guild=guild_object)
+@bot.tree.command(name="scan", description="Ping scan for known network ranges")
 @is_allowed_user()
 async def scan(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -144,7 +208,7 @@ async def scan(interaction: discord.Interaction):
         await interaction.followup.send(f"Error: {e}")
 
 
-@bot.tree.command(name="portscan", description="Scan local network for devices and open ports", guild=guild_object)
+@bot.tree.command(name="portscan", description="Scan local network for devices and open ports")
 @is_allowed_user()
 async def portscan(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -168,7 +232,7 @@ async def portscan(interaction: discord.Interaction):
         await interaction.followup.send(f"Error: {e}")
 
 
-@bot.tree.command(name="robots", description="Fetch robots.txt from a website", guild=guild_object)
+@bot.tree.command(name="robots", description="Fetch robots.txt from a website")
 @is_allowed_user()
 async def robots(interaction: discord.Interaction, url: str):
     await interaction.response.defer()
@@ -185,7 +249,7 @@ async def robots(interaction: discord.Interaction, url: str):
             return
 
         # Split into chunks for Discord's 2000 char limit
-        chunks = [content[i : i + 1990] for i in range(0, len(content), 1990)]
+        chunks = [content[i: i + 1990] for i in range(0, len(content), 1990)]
         for chunk in chunks:
             await interaction.followup.send(f"```\n{chunk}```")
 
@@ -193,7 +257,7 @@ async def robots(interaction: discord.Interaction, url: str):
         await interaction.followup.send(f"Error fetching robots.txt: {e}")
 
 
-@bot.tree.command(name="tuah", description="Reveal the tuah image", guild=guild_object)
+@bot.tree.command(name="tuah", description="Reveal the tuah image")
 @is_allowed_user()
 async def tuah(interaction: discord.Interaction):
     await interaction.response.send_message(

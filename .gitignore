@@ -3,3 +3,7 @@
 discord.log
 .venv
 venv/
+src/ebay_results.json
+src/ebay_last_seen.json
+ebay_last_seen.json
+ebay_last_seen.json
