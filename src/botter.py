@@ -3,6 +3,7 @@ import os
 import random
 import re
 import subprocess
+from datetime import time
 
 import discord
 import dotenv
@@ -22,6 +23,8 @@ USER_ID_CHAPPY = int(os.getenv("USER_ID_CHAPPY", 0))
 USER_ID_JOSH = int(os.getenv("USER_ID_JOSH", 0))
 USER_ID_MAX = int(os.getenv("USER_ID_MAX", 0))
 PRIVATE_SERVER_BOT_CHANNEL_ID = int(os.getenv("PRIVATE_SERVER_BOT_CHANNEL_ID", 0))
+GENERAL_G_CHANNEL_ID = int(os.getenv("GENERAL_G_CHANNEL_ID", 0))
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 
 BLOCKED_USERS = {USER_ID_JOSH}
 NETWORK_RANGES = ["192.168.5.0/24", "192.168.1.0/24"]
@@ -34,6 +37,63 @@ intents.presences = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 handler = logging.FileHandler(filename="discord.log", encoding="utf-8", mode="w")
+
+
+def fetch_weather():
+    url = f"http://api.openweathermap.org/data/2.5/forecast?q=Maidstone,GB&appid={OPENWEATHER_API_KEY}&units=metric"
+
+    with requests.Session() as session:
+        resp = session.get(url)
+        if resp.status_code != 200:
+            logging.error(f"Weather API returned {resp.status_code}")
+            return None
+        data = resp.json()
+
+    forecasts = data['list'][:8]  # next 24h
+
+    high = max(f['main']['temp_max'] for f in forecasts)
+    low = min(f['main']['temp_min'] for f in forecasts)
+    current = forecasts[0]['weather'][0]['description'].title()
+    rain_expected = any('rain' in f['weather'][0]['main'].lower() for f in forecasts)
+
+    # build hourly breakdown (3-hour intervals)
+    hourly_lines = []
+    for f in forecasts[:6]:  # next 18 hours
+        time_str = f['dt_txt'].split(' ')[1][:5]  # "09:00"
+        temp = f['main']['temp']
+        icon = "🌧️" if 'rain' in f['weather'][0]['main'].lower() else "☀️"
+        hourly_lines.append(f"`{time_str}` {icon} {temp:.0f}°C")
+
+    embed = discord.Embed(
+        title="☀️ Weather for Maidstone",
+        color=0x5dadec
+    )
+    embed.add_field(name="Now", value=current, inline=False)
+    embed.add_field(name="High", value=f"{high:.0f}°C", inline=True)
+    embed.add_field(name="Low", value=f"{low:.0f}°C", inline=True)
+    embed.add_field(name="Forecast", value="\n".join(hourly_lines), inline=False)
+
+    if rain_expected:
+        embed.add_field(name="⚠️", value="Rain expected today", inline=False)
+
+    return embed
+
+
+@tasks.loop(time=time(hour=7, minute=0))
+async def daily_weather():
+    channel = bot.get_channel(GENERAL_G_CHANNEL_ID)
+    if not channel:
+        logging.error("Weather channel not found")
+        return
+
+    weather_embed = fetch_weather()
+    if weather_embed:
+        await channel.send(embed=weather_embed)
+
+
+@daily_weather.before_loop
+async def before_daily_weather():
+    await bot.wait_until_ready()
 
 
 def is_allowed_user():
@@ -121,6 +181,9 @@ async def on_ready():
 
     if not check_ebay.is_running():
         check_ebay.start()
+
+    if not daily_weather.is_running():
+        daily_weather.start()
 
 
 @bot.event
@@ -263,6 +326,18 @@ async def tuah(interaction: discord.Interaction):
     await interaction.response.send_message(
         "https://media.discordapp.net/attachments/625765035754651673/1367451011186429992/IMG_0140.png"
     )
+
+
+@bot.tree.command(name="weather", description="Get current weather for Maidstone")
+@is_allowed_user()
+async def weather(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    weather_embed = fetch_weather()
+    if weather_embed:
+        await interaction.followup.send(embed=weather_embed)
+    else:
+        await interaction.followup.send("Failed to fetch weather data.")
 
 
 if __name__ == "__main__":
