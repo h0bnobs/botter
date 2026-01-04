@@ -2,12 +2,15 @@ import base64
 import json
 import logging
 import os
+import dotenv
 from datetime import datetime
 from pathlib import Path
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+dotenv.load_dotenv()
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 
