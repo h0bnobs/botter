@@ -14,6 +14,7 @@ from discord.ext import commands, tasks
 
 import nmap as nm
 from eb import get_new_listings, EbayAuthError, EbayAPIError
+from planes import get_nearby_aircraft
 
 dotenv.load_dotenv()
 
@@ -175,9 +176,17 @@ async def before_check_ebay():
 
 @bot.event
 async def on_ready():
+    print(f"Commands in tree before sync: {[cmd.name for cmd in bot.tree.get_commands()]}")
+    print(f"Syncing commands...")
+
+    # Copy global commands to each guild
     for guild_id in GUILD_IDS:
-        await bot.tree.sync(guild=discord.Object(id=guild_id))
+        guild_obj = discord.Object(id=guild_id)
+        bot.tree.copy_global_to(guild=guild_obj)
+        synced = await bot.tree.sync(guild=guild_obj)
+        print(f"Guild ID {guild_id}: Synced {len(synced)} commands - {[cmd.name for cmd in synced]}")
     print(f"Logged in as {bot.user.name} ({bot.user.id})")
+
 
     if not check_ebay.is_running():
         check_ebay.start()
@@ -191,46 +200,79 @@ async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
 
-    # React to Josh's messages
     if message.author.id == USER_ID_JOSH:
         for emoji in ["🇬", "0️⃣", "🇴", "🇳"]:
             await message.add_reaction(emoji)
 
-    # Convert x.com links to fixupx.com
     if "x.com/" in message.content:
         x_links = re.findall(r"https?://(?:www\.)?x\.com/\S+", message.content)
         if x_links:
-            # Replace x.com with fixupx.com in the message content
             new_content = re.sub(r"https?://(?:www\.)?x\.com/", "https://fixupx.com/", message.content)
 
-            # Remove ?s= parameter and everything after it
             new_content = re.sub(r"\?s=[^\s]*", "", new_content)
 
-            # Build the new message with author mention
             final_message = f"{message.author.mention}: {new_content}"
 
-            # Collect any attachments
             files = [await attachment.to_file() for attachment in message.attachments]
 
-            # Delete the original message
             try:
                 await message.delete()
             except discord.errors.Forbidden:
-                pass  # Bot lacks permission to delete
+                pass
 
-            # Send the new message with fixed links and attachments
             await message.channel.send(final_message, files=files if files else None)
-
-    trigger_words = ["tuah", "hawk", "the thing", "67"]
-    if any(word in message.content.lower() for word in trigger_words):
-        await message.channel.send(
-            "https://tenor.com/view/marvel-fan4stic-fantastic-four-the-thing-say-that-again-gif-9345984830195785978"
-        )
 
     if message and random.randint(1, 1000) == 1:
         await message.channel.send("1 in 1000!")
 
     await bot.process_commands(message)
+
+
+@bot.tree.command(name="fr", description="Show aircraft currently flying nearby")
+#@is_allowed_user()
+async def fr(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    try:
+        aircraft_list = get_nearby_aircraft(51.254038, 0.437667, radius_km=15)
+
+        if not aircraft_list:
+            await interaction.followup.send("No aircraft detected nearby.")
+            return
+
+        lines = []
+        for ac in aircraft_list:
+            callsign = (ac[1] or "").strip() or "Unknown"
+            origin_country = ac[2] or "?"
+            altitude = ac[7]
+            velocity = ac[9]
+            vertical_rate = ac[11]  # meters/second
+
+            alt_ft = int(altitude * 3.281) if altitude else "?"
+            spd_kts = int(velocity * 1.944) if velocity else "?"
+
+            # Calculate climb/descent indicator
+            climb_indicator = ""
+            if vertical_rate:
+                if vertical_rate > 0.5:
+                    climb_indicator = " ↗"
+                elif vertical_rate < -0.5:
+                    climb_indicator = " ↘"
+
+            # Create FlightRadar24 link if we have a valid callsign
+            if callsign != "Unknown":
+                fr_link = f"https://www.flightradar24.com/{callsign}"
+                lines.append(f"✈️ **[{callsign}]({fr_link})** ({origin_country}) - {alt_ft}ft, {spd_kts}kts{climb_indicator}")
+            else:
+                lines.append(f"✈️ **{callsign}** ({origin_country}) - {alt_ft}ft, {spd_kts}kts{climb_indicator}")
+
+        response = "\n".join(lines)
+        if len(response) > 1900:
+            response = "\n".join(lines[:20]) + f"\n\n*...and {len(lines) - 20} more*"
+
+        await interaction.followup.send(response)
+    except Exception as e:
+        await interaction.followup.send(f"Error: {e}")
 
 
 @bot.tree.command(name="cpu", description="Show current CPU usage")
@@ -260,6 +302,9 @@ async def ip(interaction: discord.Interaction):
 @is_allowed_user()
 async def scan(interaction: discord.Interaction):
     await interaction.response.defer()
+    if interaction.user.id != USER_ID_MAX:
+        await interaction.response.send_message("Access denied.", ephemeral=True)
+        return
 
     try:
         hosts = nm.discover_hosts(NETWORK_RANGES)
@@ -275,6 +320,9 @@ async def scan(interaction: discord.Interaction):
 @is_allowed_user()
 async def portscan(interaction: discord.Interaction):
     await interaction.response.defer()
+    if interaction.user.id != USER_ID_MAX:
+        await interaction.response.send_message("Access denied.", ephemeral=True)
+        return
 
     try:
         await interaction.followup.send("Discovering hosts...")
@@ -300,7 +348,6 @@ async def portscan(interaction: discord.Interaction):
 async def robots(interaction: discord.Interaction, url: str):
     await interaction.response.defer()
 
-    # Sanitise and normalise URL
     target = url.replace("https://", "").replace("http://", "").rstrip("/")
 
     try:
@@ -311,7 +358,6 @@ async def robots(interaction: discord.Interaction, url: str):
             await interaction.followup.send("Empty or no robots.txt found.")
             return
 
-        # Split into chunks for Discord's 2000 char limit
         chunks = [content[i: i + 1990] for i in range(0, len(content), 1990)]
         for chunk in chunks:
             await interaction.followup.send(f"```\n{chunk}```")
