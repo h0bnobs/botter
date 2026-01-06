@@ -133,30 +133,53 @@ def filter_new_listings(items: list, last_seen: dict | None) -> list:
         return items
 
     new_items = []
-    for item in items:
+    found_last_seen = False
+
+    for idx, item in enumerate(items):
         try:
             item_date = parse_ebay_date(item.get("itemCreationDate", ""))
             item_id = item.get("itemId")
 
+            logger.debug(f"Item {idx}: ID={item_id}, Date={item_date}")
+
             if item_id == last_seen_id:
-                logger.debug(f"Reached last seen item: {item_id}")
+                logger.debug(f"Found last seen item at position {idx}: {item_id}")
+                found_last_seen = True
                 break
             if item_date > last_seen_date:
                 new_items.append(item)
-                logger.debug(f"New item found: {item_id} - {item.get('title', 'No title')[:50]}")
+                logger.debug(f"New item {idx}: {item_id} - {item.get('title', 'No title')[:50]}")
             else:
-                logger.debug(f"Item {item_id} is older than last seen, stopping filter")
+                logger.debug(f"Item {idx} ({item_id}) is older than last seen date, stopping filter")
                 break
-        except ValueError:
-            logger.warning(f"Skipping item with invalid date: {item.get('itemId')}")
+        except ValueError as e:
+            logger.warning(f"Skipping item {idx} with invalid date: {item.get('itemId')} - {e}")
             continue
 
-    logger.info(f"Filtered {len(new_items)} new listings")
+    if not found_last_seen and new_items:
+        logger.warning(f"Last seen item {last_seen_id} not found in results. This may indicate the search results don't match the expected category.")
+
+    logger.info(f"Filtered {len(new_items)} new listings (found_last_seen={found_last_seen})")
     return new_items
 
 
 def search_ebay(access_token: str, marketplace: str = "EBAY_GB", limit: int = 50) -> list:
     logger.info(f"Searching eBay: marketplace={marketplace}, limit={limit}")
+
+    # Using category_ids=179 (Desktop & All-In-One PCs)
+    # Note: bn_1635224 from the URL is a browse node, not a category_id
+    # The Browse API uses different category IDs than the website browse nodes
+    # Category 179 = Desktop & All-In-One PCs (parent category)
+    # We're searching for Brand New (condition 7000) items sorted by newly listed
+    params = {
+        "category_ids": "179",  # Using parent category as Browse API may not accept browse nodes
+        "filter": "conditionIds:{7000}",
+        "sort": "newlyListed",
+        "limit": limit
+    }
+
+    logger.debug(f"Search parameters: {params}")
+
     try:
         logger.debug(f"Sending search request to {BROWSE_API_URL}")
         response = requests.get(
@@ -166,15 +189,11 @@ def search_ebay(access_token: str, marketplace: str = "EBAY_GB", limit: int = 50
                 "X-EBAY-C-MARKETPLACE-ID": marketplace,
                 "Content-Type": "application/json"
             },
-            params={
-                "category_ids": "179",
-                "filter": "conditionIds:{7000}",
-                "sort": "newlyListed",
-                "limit": limit
-            },
+            params=params,
             timeout=15
         )
         logger.debug(f"Search response status code: {response.status_code}")
+        logger.debug(f"Response URL: {response.url}")
     except requests.Timeout:
         logger.error("eBay search request timed out")
         raise EbayAPIError("Search request timed out")
@@ -186,11 +205,22 @@ def search_ebay(access_token: str, marketplace: str = "EBAY_GB", limit: int = 50
         logger.error("eBay search failed: Token expired or invalid")
         raise EbayAuthError("Token expired or invalid")
     if response.status_code != 200:
+        error_body = response.text
         logger.error(f"eBay search failed with status code {response.status_code}")
-        raise EbayAPIError(f"Search failed (HTTP {response.status_code})")
+        logger.error(f"Error response body: {error_body}")
+        raise EbayAPIError(f"Search failed (HTTP {response.status_code}): {error_body}")
 
     items = response.json().get("itemSummaries", [])
     logger.info(f"Search returned {len(items)} items")
+
+    # Log first few items for debugging
+    if items:
+        logger.debug(f"First item: ID={items[0].get('itemId')}, Title={items[0].get('title', '')[:60]}, Created={items[0].get('itemCreationDate')}")
+        if len(items) > 1:
+            logger.debug(f"Second item: ID={items[1].get('itemId')}, Title={items[1].get('title', '')[:60]}, Created={items[1].get('itemCreationDate')}")
+        if len(items) > 2:
+            logger.debug(f"Third item: ID={items[2].get('itemId')}, Title={items[2].get('title', '')[:60]}, Created={items[2].get('itemCreationDate')}")
+
     return items
 
 
