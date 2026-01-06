@@ -217,6 +217,8 @@ async def on_ready():
     logger.info("Bot is ready, starting initialization")
     logger.debug(f"Commands in tree before sync: {[cmd.name for cmd in bot.tree.get_commands()]}")
     logger.info("Syncing commands with Discord...")
+    print(f"Commands in tree before sync: {[cmd.name for cmd in bot.tree.get_commands()]}")
+    print(f"Syncing commands...")
 
     # Copy global commands to each guild
     for guild_id in GUILD_IDS:
@@ -225,8 +227,10 @@ async def on_ready():
         bot.tree.copy_global_to(guild=guild_obj)
         synced = await bot.tree.sync(guild=guild_obj)
         logger.info(f"Guild ID {guild_id}: Synced {len(synced)} commands - {[cmd.name for cmd in synced]}")
+        print(f"Guild ID {guild_id}: Synced {len(synced)} commands - {[cmd.name for cmd in synced]}")
 
     logger.info(f"Logged in as {bot.user.name} (ID: {bot.user.id})")
+    print(f"Logged in as {bot.user.name} ({bot.user.id})")
 
     if not check_ebay.is_running():
         logger.info("Starting eBay check task")
